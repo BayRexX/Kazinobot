@@ -1,0 +1,9 @@
+services:
+  - type: worker
+    name: kazinobot-worker
+    runtime: python
+    repo: https://github.com/BayRexX/Kazinobot
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python index.py
+    plan: free

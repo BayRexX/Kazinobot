@@ -11,7 +11,6 @@ ADMIN_ID = 8642015975
 DATA_FILE = "users_data.json"
 users = {}
 last_update_id = 0
-admin_temp_data = {}
 
 # HTTP сервер для Render
 class Handler(BaseHTTPRequestHandler):
@@ -91,9 +90,22 @@ def send_message(chat_id, text, reply_markup=None):
         if reply_markup:
             data["reply_markup"] = json.dumps(reply_markup)
         post_data = urllib.parse.urlencode(data).encode()
-        urllib.request.urlopen(urllib.request.Request(url, data=post_data))
+        req = urllib.request.Request(url, data=post_data, method="POST")
+        urllib.request.urlopen(req)
     except Exception as e:
         print(f"Send error: {e}")
+
+def answer_callback(callback_id, text, show_alert=False):
+    try:
+        import urllib.request
+        import urllib.parse
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
+        data = {"callback_query_id": callback_id, "text": text, "show_alert": show_alert}
+        post_data = urllib.parse.urlencode(data).encode()
+        req = urllib.request.Request(url, data=post_data, method="POST")
+        urllib.request.urlopen(req)
+    except Exception as e:
+        print(f"Answer callback error: {e}")
 
 def edit_message(chat_id, message_id, text, reply_markup=None):
     try:
@@ -104,7 +116,8 @@ def edit_message(chat_id, message_id, text, reply_markup=None):
         if reply_markup:
             data["reply_markup"] = json.dumps(reply_markup)
         post_data = urllib.parse.urlencode(data).encode()
-        urllib.request.urlopen(urllib.request.Request(url, data=post_data))
+        req = urllib.request.Request(url, data=post_data, method="POST")
+        urllib.request.urlopen(req)
     except Exception as e:
         print(f"Edit error: {e}")
 
@@ -126,30 +139,33 @@ def admin_main_keyboard():
             [{"text": "🏠 Изменить дом", "callback_data": "admin_house"}],
             [{"text": "💼 Изменить бизнесы", "callback_data": "admin_business"}],
             [{"text": "🌾 Изменить фермы", "callback_data": "admin_farm"}],
-            [{"text": "⚙️ Регулировать прибыль", "callback_data": "admin_profit"}],
             [{"text": "💾 Экспорт БД", "callback_data": "admin_export"}],
             [{"text": "📥 Импорт БД", "callback_data": "admin_import"}]
         ]
     }
 
-def admin_user_selection_keyboard(action):
+def admin_user_list_keyboard(action):
     keyboard = {"inline_keyboard": []}
-    for uid, u in list(users.items())[:20]:
+    count = 0
+    for uid, u in users.items():
+        if count >= 20:
+            break
         keyboard["inline_keyboard"].append([
-            {"text": f"👤 {u['name']} (ID: {uid})", "callback_data": f"admin_select_{action}_{uid}"}
+            {"text": f"👤 {u['name'][:20]}", "callback_data": f"adm_sel_{action}_{uid}"}
         ])
+        count += 1
     keyboard["inline_keyboard"].append([{"text": "🔙 Назад", "callback_data": "admin_back"}])
     return keyboard
 
-def admin_edit_keyboard(uid, field, current_value):
+def admin_edit_keyboard(uid, field):
     return {
         "inline_keyboard": [
-            [{"text": "➕ +100", "callback_data": f"admin_add_{field}_{uid}_100"}],
-            [{"text": "➕ +1000", "callback_data": f"admin_add_{field}_{uid}_1000"}],
-            [{"text": "➖ -100", "callback_data": f"admin_sub_{field}_{uid}_100"}],
-            [{"text": "➖ -1000", "callback_data": f"admin_sub_{field}_{uid}_1000"}],
-            [{"text": "✏️ Ввести значение", "callback_data": f"admin_set_{field}_{uid}"}],
-            [{"text": "🔙 Назад", "callback_data": f"admin_back_select_{field}"}]
+            [{"text": "➕ +100", "callback_data": f"adm_add_{field}_{uid}_100"}],
+            [{"text": "➕ +1000", "callback_data": f"adm_add_{field}_{uid}_1000"}],
+            [{"text": "➖ -100", "callback_data": f"adm_sub_{field}_{uid}_100"}],
+            [{"text": "➖ -1000", "callback_data": f"adm_sub_{field}_{uid}_1000"}],
+            [{"text": "🔙 Назад к списку", "callback_data": f"adm_back_list_{field}"}],
+            [{"text": "🔙 В главное меню", "callback_data": "admin_back"}]
         ]
     }
 
@@ -157,15 +173,19 @@ def house_buy_keyboard(current_level):
     keyboard = {"inline_keyboard": []}
     for level in range(1, 6):
         house = get_house_info(level)
-        if level > current_level:
+        if level == current_level + 1:
             keyboard["inline_keyboard"].append([
-                {"text": f"🏠 {house['name']} - {house['price']}💰", "callback_data": f"buy_house_{level}"}
+                {"text": f"🏠 Купить {house['name']} - {house['price']}💰", "callback_data": f"buy_house_{level}"}
+            ])
+        elif level <= current_level:
+            keyboard["inline_keyboard"].append([
+                {"text": f"✅ {house['name']} (уже куплен)", "callback_data": "none"}
             ])
         else:
             keyboard["inline_keyboard"].append([
-                {"text": f"✅ {house['name']} (уже куплен)", "callback_data": "noop"}
+                {"text": f"🔒 {house['name']} (нужен дом уровнем ниже)", "callback_data": "none"}
             ])
-    keyboard["inline_keyboard"].append([{"text": "🔙 Назад", "callback_data": "back_menu"}])
+    keyboard["inline_keyboard"].append([{"text": "🔙 Главное меню", "callback_data": "back_menu"}])
     return keyboard
 
 # ========== ОБРАБОТКА КОМАНД ==========
@@ -191,7 +211,8 @@ def handle_message(msg):
             "📦 /collect - собрать доход\n"
             "🎁 /daily - бонус\n"
             "💸 /give 100 - перевод\n"
-            "🏆 /top - топ")
+            "🏆 /top - топ\n"
+            "👑 /admin - админ панель")
     
     # PROFILE
     elif text == "/profile":
@@ -203,7 +224,7 @@ def handle_message(msg):
     
     # BALANCE
     elif text == "/balance":
-        send_message(chat_id, f"💰 Баланс: {users[user_id]['balance']}💰")
+        send_message(chat_id, f"💰 Ваш баланс: {users[user_id]['balance']}💰")
     
     # HOUSE
     elif text == "/house":
@@ -212,9 +233,15 @@ def handle_message(msg):
     # CASINO
     elif text.startswith("/casino "):
         try:
-            bet = int(text.split()[1])
-            if bet <= 0 or users[user_id]["balance"] < bet:
-                send_message(chat_id, "❌ Не хватает денег!")
+            parts = text.split()
+            if len(parts) != 2:
+                send_message(chat_id, "🎲 /casino 100")
+                return
+            bet = int(parts[1])
+            if bet <= 0:
+                send_message(chat_id, "❌ Ставка должна быть больше 0!")
+            elif users[user_id]["balance"] < bet:
+                send_message(chat_id, f"❌ Не хватает! У вас {users[user_id]['balance']}💰")
             else:
                 if random.random() < 0.45:
                     win = bet * 2
@@ -225,7 +252,7 @@ def handle_message(msg):
                     users[user_id]["balance"] -= bet
                     save_users()
                     send_message(chat_id, f"😞 ПРОИГРЫШ! -{bet}💰\n💰 Баланс: {users[user_id]['balance']}💰")
-        except:
+        except ValueError:
             send_message(chat_id, "🎲 /casino 100")
     
     # ALLIN
@@ -251,7 +278,7 @@ def handle_message(msg):
             save_users()
             send_message(chat_id, f"✅ Бизнес куплен! -500💰\nДоход: 50💰/час")
         else:
-            send_message(chat_id, f"❌ Нужно 500💰")
+            send_message(chat_id, f"❌ Нужно 500💰, у вас {users[user_id]['balance']}💰")
     
     # FARM
     elif text == "/farm":
@@ -261,7 +288,7 @@ def handle_message(msg):
             save_users()
             send_message(chat_id, f"✅ Ферма куплена! -300💰\nДоход: 30💰/час")
         else:
-            send_message(chat_id, f"❌ Нужно 300💰")
+            send_message(chat_id, f"❌ Нужно 300💰, у вас {users[user_id]['balance']}💰")
     
     # COLLECT
     elif text == "/collect":
@@ -274,7 +301,7 @@ def handle_message(msg):
         if hours < 1:
             remaining = 3600 - (now - users[user_id]['last_collect'])
             minutes = int(remaining // 60)
-            send_message(chat_id, f"⏳ До сбора: {minutes} мин")
+            send_message(chat_id, f"⏳ До следующего сбора: {minutes} минут")
         else:
             house_income = get_house_info(users[user_id]['house_level'])["income"]
             total = users[user_id]["businesses"] * 50 + users[user_id]["farms"] * 30 + house_income
@@ -283,39 +310,47 @@ def handle_message(msg):
                 users[user_id]["balance"] += total
                 users[user_id]['last_collect'] = now
                 save_users()
-                send_message(chat_id, f"📦 +{total}💰 за {int(hours)} ч!\n💰 Баланс: {users[user_id]['balance']}💰")
+                send_message(chat_id, f"📦 Собрано {total}💰 за {int(hours)} час(ов)!\n💰 Баланс: {users[user_id]['balance']}💰")
             else:
-                send_message(chat_id, "⏳ Нет бизнесов, ферм и дома!")
+                send_message(chat_id, "⏳ У вас нет бизнесов, ферм и дома!")
     
     # DAILY
     elif text == "/daily":
         today = datetime.now().date()
         if users[user_id]["last_daily"] == today:
-            send_message(chat_id, "❌ Бонус уже получен!")
+            send_message(chat_id, "❌ Бонус уже получен! Завтра.")
         else:
-            users[user_id]["balance"] += 200
+            bonus = 200 + users[user_id]["house_level"] * 50
+            users[user_id]["balance"] += bonus
             users[user_id]["last_daily"] = today
             save_users()
-            send_message(chat_id, f"🎁 +200💰! Баланс: {users[user_id]['balance']}💰")
+            send_message(chat_id, f"🎁 ЕЖЕДНЕВНЫЙ БОНУС! +{bonus}💰\n💰 Баланс: {users[user_id]['balance']}💰")
     
     # GIVE
     elif text.startswith("/give "):
         if "reply_to_message" not in msg:
-            send_message(chat_id, "❌ Ответьте на сообщение!")
+            send_message(chat_id, "❌ Ответьте на сообщение человека, которому хотите перевести!")
             return
         try:
-            amount = int(text.split()[1])
+            parts = text.split()
+            if len(parts) != 2:
+                send_message(chat_id, "💸 /give 100")
+                return
+            amount = int(parts[1])
             receiver_id = msg["reply_to_message"]["from"]["id"]
             receiver_name = msg["reply_to_message"]["from"].get("first_name", "User")
-            if amount <= 0 or users[user_id]["balance"] < amount:
-                send_message(chat_id, "❌ Не хватает!")
+            if amount <= 0:
+                send_message(chat_id, "❌ Сумма должна быть больше 0!")
+            elif users[user_id]["balance"] < amount:
+                send_message(chat_id, f"❌ Не хватает! У вас {users[user_id]['balance']}💰")
             else:
                 init_user(receiver_id, receiver_name)
                 users[user_id]["balance"] -= amount
                 users[receiver_id]["balance"] += amount
                 save_users()
-                send_message(chat_id, f"✅ Переведено {amount}💰 {receiver_name}")
-        except:
+                send_message(chat_id, f"✅ Переведено {amount}💰 пользователю {receiver_name}")
+                send_message(receiver_id, f"💰 {user_name} перевёл(а) вам {amount}💰!")
+        except ValueError:
             send_message(chat_id, "💸 /give 100")
     
     # TOP
@@ -331,23 +366,30 @@ def handle_message(msg):
             send_message(chat_id, result)
     
     # ADMIN
-    elif text == "/admin" and user_id == ADMIN_ID:
-        send_message(chat_id, "👑 АДМИН ПАНЕЛЬ 👑", admin_main_keyboard())
+    elif text == "/admin":
+        if user_id == ADMIN_ID:
+            send_message(chat_id, "👑 АДМИН ПАНЕЛЬ 👑\nВыберите действие:", admin_main_keyboard())
+        else:
+            send_message(chat_id, "❌ У вас нет доступа к админ панели!")
 
 def show_profile(chat_id, user_id):
     u = users[user_id]
     house = get_house_info(u['house_level'])
     hourly_income = u["businesses"] * 50 + u["farms"] * 30 + house["income"]
-    daily_status = "Доступен" if u["last_daily"] != datetime.now().date() else "Уже получен"
+    
+    if u["last_daily"] == datetime.now().date():
+        daily_status = "✅ Получен сегодня"
+    else:
+        daily_status = "🎁 Доступен"
     
     msg = (
         f"👤 <b>{u['name']}</b>\n\n"
         f"💰 Баланс: {u['balance']}💰\n"
-        f"🏠 Дом: {house['name']} (+{house['income']}💰/ч)\n"
-        f"💼 Бизнесов: {u['businesses']} (+50💰/ч)\n"
-        f"🌾 Ферм: {u['farms']} (+30💰/ч)\n"
-        f"📊 Доход в час: {hourly_income}💰\n"
-        f"🎁 Бонус: {daily_status}"
+        f"🏠 Дом: {house['name']} (+{house['income']}💰/час)\n"
+        f"💼 Бизнесов: {u['businesses']} (+{u['businesses']*50}💰/час)\n"
+        f"🌾 Ферм: {u['farms']} (+{u['farms']*30}💰/час)\n"
+        f"📊 Общий доход в час: {hourly_income}💰\n"
+        f"🎁 Ежедневный бонус: {daily_status}"
     )
     send_message(chat_id, msg)
 
@@ -355,7 +397,7 @@ def show_house_menu(chat_id, user_id):
     current_level = users[user_id]['house_level']
     current_house = get_house_info(current_level)
     keyboard = house_buy_keyboard(current_level)
-    msg = f"🏠 Ваш дом: {current_house['name']} (+{current_house['income']}💰/ч)\n\nДоступные дома:"
+    msg = f"🏠 <b>Ваш дом:</b> {current_house['name']}\n💵 Доход: +{current_house['income']}💰/час\n\n<u>Доступные дома для покупки:</u>"
     send_message(chat_id, msg, keyboard)
 
 # ========== ОБРАБОТКА CALLBACK ==========
@@ -363,117 +405,190 @@ def handle_callback(callback):
     chat_id = callback["message"]["chat"]["id"]
     message_id = callback["message"]["message_id"]
     user_id = callback["from"]["id"]
+    callback_id = callback["id"]
     data = callback["data"]
+    
+    # Пропускаем пустые кнопки
+    if data == "none":
+        answer_callback(callback_id, "Это действие недоступно", True)
+        return
     
     # Покупка дома
     if data.startswith("buy_house_"):
-        level = int(data.split("_")[2])
-        house = get_house_info(level)
-        if users[user_id]["house_level"] + 1 == level and users[user_id]["balance"] >= house["price"]:
-            users[user_id]["balance"] -= house["price"]
-            users[user_id]["house_level"] = level
-            save_users()
-            edit_message(chat_id, message_id, f"✅ Куплен {house['name']}!\n💰 Остаток: {users[user_id]['balance']}💰")
-        else:
-            edit_message(chat_id, message_id, "❌ Не хватает денег или нужно покупать по порядку!")
+        if user_id != ADMIN_ID:
+            level = int(data.split("_")[2])
+            house = get_house_info(level)
+            if users[user_id]["house_level"] + 1 == level:
+                if users[user_id]["balance"] >= house["price"]:
+                    users[user_id]["balance"] -= house["price"]
+                    users[user_id]["house_level"] = level
+                    save_users()
+                    answer_callback(callback_id, f"✅ Вы купили {house['name']}!", False)
+                    edit_message(chat_id, message_id, f"🏠 Поздравляем! Вы купили {house['name']}!\n💰 Остаток: {users[user_id]['balance']}💰")
+                else:
+                    answer_callback(callback_id, f"❌ Не хватает! Нужно {house['price']}💰", True)
+            else:
+                answer_callback(callback_id, "❌ Нужно покупать дома по порядку!", True)
         show_house_menu(chat_id, user_id)
         return
     
     if data == "back_menu":
-        show_house_menu(chat_id, user_id)
+        send_message(chat_id, "🎰 Главное меню:\n/start - все команды")
         return
     
-    # АДМИН КНОПКИ
+    # АДМИН ПАНЕЛЬ (только для админа)
     if user_id != ADMIN_ID:
+        answer_callback(callback_id, "❌ У вас нет доступа!", True)
         return
     
-    # Главное меню
+    # Главное меню админа
     if data == "admin_balance":
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_selection_keyboard("balance"))
+        edit_message(chat_id, message_id, "👑 Выберите пользователя для изменения баланса:", admin_user_list_keyboard("balance"))
     elif data == "admin_house":
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_selection_keyboard("house"))
+        edit_message(chat_id, message_id, "👑 Выберите пользователя для изменения дома:", admin_user_list_keyboard("house"))
     elif data == "admin_business":
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_selection_keyboard("business"))
+        edit_message(chat_id, message_id, "👑 Выберите пользователя для изменения бизнесов:", admin_user_list_keyboard("business"))
     elif data == "admin_farm":
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_selection_keyboard("farm"))
-    elif data == "admin_profit":
-        edit_message(chat_id, message_id, "⚙️ Регулировка прибыли пока в разработке")
+        edit_message(chat_id, message_id, "👑 Выберите пользователя для изменения ферм:", admin_user_list_keyboard("farm"))
     elif data == "admin_export":
         try:
-            with open(DATA_FILE, 'r') as f:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 backup_data = f.read()
-            send_message(chat_id, f"💾 Бэкап БД:\n<code>{backup_data[:3000]}</code>")
-        except:
-            send_message(chat_id, "❌ Ошибка экспорта")
+            if len(backup_data) > 4000:
+                backup_data = backup_data[:4000] + "\n... (файл слишком большой)"
+            send_message(chat_id, f"💾 <b>Экспорт базы данных</b>\n\n<code>{backup_data}</code>")
+            answer_callback(callback_id, "✅ БД экспортирована", False)
+        except Exception as e:
+            send_message(chat_id, f"❌ Ошибка экспорта: {e}")
     elif data == "admin_import":
-        send_message(chat_id, "📥 Отправьте JSON файл с данными")
-        admin_temp_data[user_id] = "waiting_import"
+        send_message(chat_id, "📥 Отправьте JSON файл с данными пользователей")
+        answer_callback(callback_id, "Ожидаю файл с БД", False)
     elif data == "admin_back":
-        edit_message(chat_id, message_id, "👑 АДМИН ПАНЕЛЬ", admin_main_keyboard())
+        edit_message(chat_id, message_id, "👑 АДМИН ПАНЕЛЬ 👑\nВыберите действие:", admin_main_keyboard())
     
     # Выбор пользователя
-    elif data.startswith("admin_select_"):
+    elif data.startswith("adm_sel_"):
         parts = data.split("_")
         action = parts[2]
         target_uid = int(parts[3])
         target_name = users[target_uid]["name"]
         
         if action == "balance":
-            edit_message(chat_id, message_id, f"👤 {target_name}\n💰 Баланс: {users[target_uid]['balance']}💰\n\nВыберите действие:", 
-                        admin_edit_keyboard(target_uid, "balance", users[target_uid]["balance"]))
+            edit_message(chat_id, message_id, 
+                f"👤 <b>{target_name}</b>\n💰 Баланс: {users[target_uid]['balance']}💰\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "balance"))
         elif action == "house":
-            edit_message(chat_id, message_id, f"👤 {target_name}\n🏠 Дом: {get_house_info(users[target_uid]['house_level'])['name']}\n\nВыберите действие:",
-                        admin_edit_keyboard(target_uid, "house", users[target_uid]["house_level"]))
+            house = get_house_info(users[target_uid]['house_level'])
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🏠 Дом: {house['name']} (уровень {users[target_uid]['house_level']})\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "house"))
         elif action == "business":
-            edit_message(chat_id, message_id, f"👤 {target_name}\n💼 Бизнесов: {users[target_uid]['businesses']}\n\nВыберите действие:",
-                        admin_edit_keyboard(target_uid, "business", users[target_uid]["businesses"]))
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n💼 Бизнесов: {users[target_uid]['businesses']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "business"))
         elif action == "farm":
-            edit_message(chat_id, message_id, f"👤 {target_name}\n🌾 Ферм: {users[target_uid]['farms']}\n\nВыберите действие:",
-                        admin_edit_keyboard(target_uid, "farm", users[target_uid]["farms"]))
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🌾 Ферм: {users[target_uid]['farms']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "farm"))
     
     # Изменение значений
-    elif data.startswith("admin_add_"):
+    elif data.startswith("adm_add_"):
         parts = data.split("_")
         field = parts[2]
         target_uid = int(parts[3])
         amount = int(parts[4])
+        
         if field == "balance":
             users[target_uid]["balance"] += amount
+            save_users()
+            answer_callback(callback_id, f"✅ +{amount}💰 пользователю {users[target_uid]['name']}", False)
         elif field == "house":
             new_level = min(5, users[target_uid]["house_level"] + 1)
             users[target_uid]["house_level"] = new_level
+            save_users()
+            answer_callback(callback_id, f"✅ Уровень дома повышен до {new_level}", False)
         elif field == "business":
             users[target_uid]["businesses"] += 1
+            save_users()
+            answer_callback(callback_id, f"✅ +1 бизнес (всего: {users[target_uid]['businesses']})", False)
         elif field == "farm":
             users[target_uid]["farms"] += 1
-        save_users()
-        edit_message(chat_id, message_id, f"✅ Изменено!\n{field}: {users[target_uid][field] if field != 'house' else get_house_info(users[target_uid]['house_level'])['name']}")
+            save_users()
+            answer_callback(callback_id, f"✅ +1 ферма (всего: {users[target_uid]['farms']})", False)
+        
+        # Обновляем сообщение
+        target_name = users[target_uid]["name"]
+        if field == "balance":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n💰 Баланс: {users[target_uid]['balance']}💰\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "balance"))
+        elif field == "house":
+            house = get_house_info(users[target_uid]['house_level'])
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🏠 Дом: {house['name']} (уровень {users[target_uid]['house_level']})\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "house"))
+        elif field == "business":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n💼 Бизнесов: {users[target_uid]['businesses']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "business"))
+        elif field == "farm":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🌾 Ферм: {users[target_uid]['farms']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "farm"))
     
-    elif data.startswith("admin_sub_"):
+    elif data.startswith("adm_sub_"):
         parts = data.split("_")
         field = parts[2]
         target_uid = int(parts[3])
         amount = int(parts[4])
+        
         if field == "balance":
             users[target_uid]["balance"] = max(0, users[target_uid]["balance"] - amount)
+            save_users()
+            answer_callback(callback_id, f"✅ -{amount}💰 пользователю {users[target_uid]['name']}", False)
         elif field == "house":
             new_level = max(0, users[target_uid]["house_level"] - 1)
             users[target_uid]["house_level"] = new_level
+            save_users()
+            answer_callback(callback_id, f"✅ Уровень дома понижен до {new_level}", False)
         elif field == "business":
             users[target_uid]["businesses"] = max(0, users[target_uid]["businesses"] - 1)
+            save_users()
+            answer_callback(callback_id, f"✅ -1 бизнес (всего: {users[target_uid]['businesses']})", False)
         elif field == "farm":
             users[target_uid]["farms"] = max(0, users[target_uid]["farms"] - 1)
-        save_users()
-        edit_message(chat_id, message_id, f"✅ Изменено!")
+            save_users()
+            answer_callback(callback_id, f"✅ -1 ферма (всего: {users[target_uid]['farms']})", False)
+        
+        # Обновляем сообщение
+        target_name = users[target_uid]["name"]
+        if field == "balance":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n💰 Баланс: {users[target_uid]['balance']}💰\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "balance"))
+        elif field == "house":
+            house = get_house_info(users[target_uid]['house_level'])
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🏠 Дом: {house['name']} (уровень {users[target_uid]['house_level']})\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "house"))
+        elif field == "business":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n💼 Бизнесов: {users[target_uid]['businesses']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "business"))
+        elif field == "farm":
+            edit_message(chat_id, message_id,
+                f"👤 <b>{target_name}</b>\n🌾 Ферм: {users[target_uid]['farms']}\n\nВыберите действие:",
+                admin_edit_keyboard(target_uid, "farm"))
     
-    elif data.startswith("admin_back_select_"):
+    elif data.startswith("adm_back_list_"):
         field = data.split("_")[3]
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_selection_keyboard(field))
+        edit_message(chat_id, message_id, f"👑 Выберите пользователя для изменения {field}:", admin_user_list_keyboard(field))
 
 def main():
     global last_update_id
     load_users()
     print("🤖 Бот запущен!")
+    print("✅ HTTP сервер на порту 10000 запущен")
     
     while True:
         try:
@@ -481,14 +596,14 @@ def main():
             if updates.get("ok"):
                 for update in updates.get("result", []):
                     if "message" in update:
-                        if update["message"].get("text"):
-                            handle_message(update["message"])
+                        handle_message(update["message"])
                     if "callback_query" in update:
                         handle_callback(update["callback_query"])
-                    last_update_id = update["update_id"]
+                    if update["update_id"] > last_update_id:
+                        last_update_id = update["update_id"]
         except Exception as e:
             print(f"Error: {e}")
-        time.sleep(1)
+        time.sleep(0.5)
 
 if __name__ == "__main__":
     main()

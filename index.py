@@ -1,11 +1,8 @@
 import random
 import json
 import os
-import time
+import asyncio
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
-from aiogram.contrib.middlewares.logging import LoggingMiddleware
 
 BOT_TOKEN = "8520721981:AAEoKN5DmuiDcL6YOjCP8vf0p3nbGcqHGyw"
 DATA_FILE = "users_data.json"
@@ -13,256 +10,199 @@ users = {}
 
 def save_users():
     try:
-        data_to_save = {}
-        for uid, user_data in users.items():
-            data_to_save[str(uid)] = user_data.copy()
-            if data_to_save[str(uid)].get("last_daily"):
-                data_to_save[str(uid)]["last_daily"] = data_to_save[str(uid)]["last_daily"].isoformat()
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        print("✅ Данные сохранены")
+        with open(DATA_FILE, 'w') as f:
+            data = {}
+            for uid, u in users.items():
+                data[str(uid)] = u.copy()
+                if data[str(uid)].get("last_daily"):
+                    data[str(uid)]["last_daily"] = data[str(uid)]["last_daily"].isoformat()
+            json.dump(data, f)
+        print("✅ Saved")
     except Exception as e:
-        print(f"❌ Ошибка сохранения: {e}")
+        print(f"Save error: {e}")
 
 def load_users():
     try:
         if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            with open(DATA_FILE, 'r') as f:
                 data = json.load(f)
-            for uid, user_data in data.items():
-                if user_data.get("last_daily"):
-                    user_data["last_daily"] = datetime.fromisoformat(user_data["last_daily"])
-                users[int(uid)] = user_data
-            print(f"✅ Загружено {len(users)} пользователей")
-        else:
-            print("📁 Новый файл данных")
+            for uid, u in data.items():
+                if u.get("last_daily"):
+                    u["last_daily"] = datetime.fromisoformat(u["last_daily"])
+                users[int(uid)] = u
+            print(f"✅ Loaded {len(users)} users")
     except Exception as e:
-        print(f"❌ Ошибка загрузки: {e}")
+        print(f"Load error: {e}")
 
-def init_user(user_id, username):
-    if user_id not in users:
-        users[user_id] = {
-            "name": username,
+def init_user(uid, name):
+    if uid not in users:
+        users[uid] = {
+            "name": name,
             "balance": 1000,
-            "level": 1,
-            "exp": 0,
             "businesses": 0,
             "farms": 0,
             "last_daily": None
         }
         save_users()
 
-bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
-dp.middleware.setup(LoggingMiddleware())
+async def send_msg(chat_id, text):
+    import aiohttp
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    async with aiohttp.ClientSession() as session:
+        await session.post(url, json={"chat_id": chat_id, "text": text})
 
-@dp.message_handler(commands=['start'])
-async def start(message: types.Message):
-    init_user(message.from_user.id, message.from_user.full_name)
-    await message.reply(
-        "🎰 КАЗИНО БОТ 🎰\n\n"
-        "💰 /balance - баланс\n"
-        "👤 /profile - профиль\n"
-        "🎲 /casino <число> - сделать ставку\n"
-        "💀 /allin - рискнуть всем\n"
-        "💼 /business - купить бизнес (500💰)\n"
-        "🌾 /farm - купить ферму (300💰)\n"
-        "📦 /collect - собрать доход\n"
-        "🎁 /daily - ежедневный бонус\n"
-        "💸 /give <сумма> - перевести (ответом)\n"
-        "🏆 /top - топ игроков\n"
-        "⭐ /level - уровень\n"
-        "📊 /rating - топ по уровню"
-    )
-
-@dp.message_handler(commands=['balance'])
-async def balance(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    await message.reply(f"💰 Баланс: {users[uid]['balance']} монет")
-
-@dp.message_handler(commands=['profile'])
-async def profile(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    u = users[uid]
-    await message.reply(
-        f"👤 {u['name']}\n"
-        f"💰 {u['balance']}💰\n"
-        f"⭐ Уровень {u['level']}\n"
-        f"🏢 Бизнесов: {u['businesses']}\n"
-        f"🌾 Ферм: {u['farms']}"
-    )
-
-@dp.message_handler(commands=['level'])
-async def level_cmd(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    u = users[uid]
-    need = u['level'] * 100
-    await message.reply(f"⭐ Уровень: {u['level']}\n📊 Опыт: {u['exp']}/{need}")
-
-@dp.message_handler(commands=['casino'])
-async def casino(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    
-    args = message.get_args().split()
-    if len(args) != 1 or not args[0].isdigit():
-        await message.reply("🎲 /casino <число>\nПример: /casino 100")
+async def handle_update(update):
+    if "message" not in update:
         return
     
-    bet = int(args[0])
-    if bet <= 0:
-        await message.reply("❌ Ставка > 0!")
-        return
+    msg = update["message"]
+    chat_id = msg["chat"]["id"]
+    user_id = msg["from"]["id"]
+    user_name = msg["from"].get("first_name", "User")
+    text = msg.get("text", "")
     
-    if users[uid]["balance"] < bet:
-        await message.reply(f"❌ Не хватает! У вас {users[uid]['balance']}💰")
-        return
+    init_user(user_id, user_name)
     
-    if random.random() < 0.45:
-        win = bet * 2
-        users[uid]["balance"] += win
-        users[uid]["exp"] += win // 10
-        save_users()
-        await message.reply(f"🎉 ВЫИГРЫШ! +{win}💰\n💰 Баланс: {users[uid]['balance']}💰")
-    else:
-        users[uid]["balance"] -= bet
-        save_users()
-        await message.reply(f"😞 ПРОИГРЫШ! -{bet}💰\n💰 Баланс: {users[uid]['balance']}💰")
+    if text == "/start":
+        await send_msg(chat_id, 
+            "🎰 КАЗИНО БОТ 🎰\n\n"
+            "/balance - баланс\n"
+            "/casino 100 - сыграть\n"
+            "/allin - всё или ничего\n"
+            "/business - бизнес (500💰)\n"
+            "/farm - ферма (300💰)\n"
+            "/collect - собрать доход\n"
+            "/daily - бонус\n"
+            "/give 100 - перевод (ответом)\n"
+            "/top - топ игроков")
+    
+    elif text == "/balance":
+        await send_msg(chat_id, f"💰 Баланс: {users[user_id]['balance']}💰")
+    
+    elif text.startswith("/casino "):
+        try:
+            bet = int(text.split()[1])
+            if bet <= 0 or users[user_id]["balance"] < bet:
+                await send_msg(chat_id, "❌ Не хватает денег!")
+            else:
+                if random.random() < 0.45:
+                    win = bet * 2
+                    users[user_id]["balance"] += win
+                    save_users()
+                    await send_msg(chat_id, f"🎉 ВЫИГРЫШ! +{win}💰\n💰 Баланс: {users[user_id]['balance']}💰")
+                else:
+                    users[user_id]["balance"] -= bet
+                    save_users()
+                    await send_msg(chat_id, f"😞 ПРОИГРЫШ! -{bet}💰\n💰 Баланс: {users[user_id]['balance']}💰")
+        except:
+            await send_msg(chat_id, "🎲 /casino 100")
+    
+    elif text == "/allin":
+        bet = users[user_id]["balance"]
+        if bet <= 0:
+            await send_msg(chat_id, "❌ Нечем рисковать!")
+        else:
+            if random.random() < 0.4:
+                users[user_id]["balance"] *= 2
+                save_users()
+                await send_msg(chat_id, f"💀🔥 УДВОИЛИ! Баланс: {users[user_id]['balance']}💰")
+            else:
+                users[user_id]["balance"] = 0
+                save_users()
+                await send_msg(chat_id, f"💀😭 ПРОИГРАЛИ ВСЁ! Баланс: 0💰")
+    
+    elif text == "/business":
+        if users[user_id]["balance"] >= 500:
+            users[user_id]["balance"] -= 500
+            users[user_id]["businesses"] += 1
+            save_users()
+            await send_msg(chat_id, f"✅ Бизнес куплен! -500💰\nДоход: 50💰/час")
+        else:
+            await send_msg(chat_id, f"❌ Нужно 500💰, у вас {users[user_id]['balance']}💰")
+    
+    elif text == "/farm":
+        if users[user_id]["balance"] >= 300:
+            users[user_id]["balance"] -= 300
+            users[user_id]["farms"] += 1
+            save_users()
+            await send_msg(chat_id, f"✅ Ферма куплена! -300💰\nДоход: 30💰/час")
+        else:
+            await send_msg(chat_id, f"❌ Нужно 300💰, у вас {users[user_id]['balance']}💰")
+    
+    elif text == "/collect":
+        total = users[user_id]["businesses"] * 50 + users[user_id]["farms"] * 30
+        if total > 0:
+            users[user_id]["balance"] += total
+            save_users()
+            await send_msg(chat_id, f"📦 Собрано {total}💰!\n💰 Баланс: {users[user_id]['balance']}💰")
+        else:
+            await send_msg(chat_id, "⏳ Нет бизнесов или ферм!")
+    
+    elif text == "/daily":
+        today = datetime.now().date()
+        if users[user_id]["last_daily"] == today:
+            await send_msg(chat_id, "❌ Бонус уже получен! Завтра.")
+        else:
+            bonus = 200
+            users[user_id]["balance"] += bonus
+            users[user_id]["last_daily"] = today
+            save_users()
+            await send_msg(chat_id, f"🎁 ЕЖЕДНЕВНЫЙ БОНУС! +{bonus}💰\n💰 Баланс: {users[user_id]['balance']}💰")
+    
+    elif text.startswith("/give "):
+        if not msg.get("reply_to_message"):
+            await send_msg(chat_id, "❌ Ответьте на сообщение человека!")
+            return
+        
+        try:
+            amount = int(text.split()[1])
+            receiver_id = msg["reply_to_message"]["from"]["id"]
+            receiver_name = msg["reply_to_message"]["from"].get("first_name", "User")
+            
+            if amount <= 0 or users[user_id]["balance"] < amount:
+                await send_msg(chat_id, "❌ Не хватает денег!")
+            else:
+                init_user(receiver_id, receiver_name)
+                users[user_id]["balance"] -= amount
+                users[receiver_id]["balance"] += amount
+                save_users()
+                await send_msg(chat_id, f"✅ Переведено {amount}💰 {receiver_name}")
+        except:
+            await send_msg(chat_id, "💸 /give 100 (ответом на сообщение)")
+    
+    elif text == "/top":
+        if not users:
+            await send_msg(chat_id, "Нет игроков")
+        else:
+            sorted_users = sorted(users.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
+            result = "🏆 ТОП ПО БАЛАНСУ 🏆\n\n"
+            for i, (uid, data) in enumerate(sorted_users, 1):
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
+                result += f"{medal} {data['name']} — {data['balance']}💰\n"
+            await send_msg(chat_id, result)
 
-@dp.message_handler(commands=['allin'])
-async def allin(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
+async def main():
+    load_users()
+    print("🤖 Бот запущен!")
     
-    bet = users[uid]["balance"]
-    if bet <= 0:
-        await message.reply("❌ Нечем рисковать!")
-        return
+    import aiohttp
+    offset = 0
     
-    if random.random() < 0.4:
-        users[uid]["balance"] *= 2
-        users[uid]["exp"] += bet // 5
-        save_users()
-        await message.reply(f"💀🔥 УДВОИЛИ! Баланс: {users[uid]['balance']}💰")
-    else:
-        users[uid]["balance"] = 0
-        save_users()
-        await message.reply(f"💀😭 ПРОИГРАЛИ ВСЁ! Баланс: 0💰")
-
-@dp.message_handler(commands=['business'])
-async def business(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    
-    if users[uid]["balance"] >= 500:
-        users[uid]["balance"] -= 500
-        users[uid]["businesses"] += 1
-        save_users()
-        await message.reply(f"✅ Бизнес куплен! -500💰\nДоход: 50💰/час")
-    else:
-        await message.reply(f"❌ Нужно 500💰, у вас {users[uid]['balance']}💰")
-
-@dp.message_handler(commands=['farm'])
-async def farm(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    
-    if users[uid]["balance"] >= 300:
-        users[uid]["balance"] -= 300
-        users[uid]["farms"] += 1
-        save_users()
-        await message.reply(f"✅ Ферма куплена! -300💰\nДоход: 30💰/час")
-    else:
-        await message.reply(f"❌ Нужно 300💰, у вас {users[uid]['balance']}💰")
-
-@dp.message_handler(commands=['collect'])
-async def collect(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    
-    total = users[uid]["businesses"] * 50 + users[uid]["farms"] * 30
-    if total > 0:
-        users[uid]["balance"] += total
-        save_users()
-        await message.reply(f"📦 Собрано {total}💰!\n💰 Баланс: {users[uid]['balance']}💰")
-    else:
-        await message.reply("⏳ Нет бизнесов или ферм! Купите /business или /farm")
-
-@dp.message_handler(commands=['daily'])
-async def daily(message: types.Message):
-    uid = message.from_user.id
-    init_user(uid, message.from_user.full_name)
-    
-    today = datetime.now().date()
-    if users[uid]["last_daily"] == today:
-        await message.reply("❌ Бонус уже получен! Завтра.")
-        return
-    
-    bonus = 200 + users[uid]["level"] * 50
-    users[uid]["balance"] += bonus
-    users[uid]["exp"] += 50
-    users[uid]["last_daily"] = today
-    save_users()
-    await message.reply(f"🎁 БОНУС! +{bonus}💰 +50 опыта!\n💰 Баланс: {users[uid]['balance']}💰")
-
-@dp.message_handler(commands=['give'])
-async def give(message: types.Message):
-    sender_id = message.from_user.id
-    init_user(sender_id, message.from_user.full_name)
-    
-    args = message.get_args().split()
-    if len(args) != 1 or not args[0].isdigit():
-        await message.reply("💸 Ответьте на сообщение: /give 100")
-        return
-    
-    amount = int(args[0])
-    if amount <= 0 or users[sender_id]["balance"] < amount:
-        await message.reply(f"❌ Не хватает! У вас {users[sender_id]['balance']}💰")
-        return
-    
-    if not message.reply_to_message:
-        await message.reply("❌ Ответьте на сообщение человека!")
-        return
-    
-    receiver = message.reply_to_message.from_user
-    init_user(receiver.id, receiver.full_name)
-    
-    users[sender_id]["balance"] -= amount
-    users[receiver.id]["balance"] += amount
-    save_users()
-    
-    await message.reply(f"✅ Переведено {amount}💰 {receiver.full_name}")
-
-@dp.message_handler(commands=['top'])
-async def top(message: types.Message):
-    if not users:
-        await message.reply("Нет игроков")
-        return
-    
-    sorted_users = sorted(users.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
-    result = "🏆 ТОП ПО БАЛАНСУ 🏆\n\n"
-    for i, (uid, data) in enumerate(sorted_users, 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-        result += f"{medal} {data['name']} — {data['balance']}💰\n"
-    await message.reply(result)
-
-@dp.message_handler(commands=['rating'])
-async def rating(message: types.Message):
-    if not users:
-        await message.reply("Нет игроков")
-        return
-    
-    sorted_users = sorted(users.items(), key=lambda x: x[1]["level"], reverse=True)[:10]
-    result = "⭐ ТОП ПО УРОВНЮ ⭐\n\n"
-    for i, (uid, data) in enumerate(sorted_users, 1):
-        medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-        result += f"{medal} {data['name']} — {data['level']} уровень\n"
-    await message.reply(result)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates"
+                async with session.get(url, params={"offset": offset, "timeout": 30}) as resp:
+                    data = await resp.json()
+                    
+                    if data.get("ok"):
+                        for update in data.get("result", []):
+                            await handle_update(update)
+                            offset = update["update_id"] + 1
+        except Exception as e:
+            print(f"Error: {e}")
+        
+        await asyncio.sleep(1)
 
 if __name__ == "__main__":
-    load_users()
-    print("🤖 Бот казино запущен!")
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())

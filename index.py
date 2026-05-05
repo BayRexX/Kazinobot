@@ -1,16 +1,33 @@
 import random
 import json
 import os
-import urllib.request
-import urllib.parse
-import threading
 import time
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 BOT_TOKEN = "8520721981:AAEoKN5DmuiDcL6YOjCP8vf0p3nbGcqHGyw"
 DATA_FILE = "users_data.json"
 users = {}
 last_update_id = 0
+
+# HTTP сервер для Render (чтобы был открытый порт)
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+    
+    def log_message(self, format, *args):
+        pass
+
+def run_http_server():
+    server = HTTPServer(('0.0.0.0', 10000), Handler)
+    server.serve_forever()
+
+# Запускаем HTTP сервер в отдельном потоке
+threading.Thread(target=run_http_server, daemon=True).start()
 
 def save_users():
     try:
@@ -21,7 +38,6 @@ def save_users():
                 if data[str(uid)].get("last_daily"):
                     data[str(uid)]["last_daily"] = data[str(uid)]["last_daily"].isoformat()
             json.dump(data, f)
-        print("✅ Saved")
     except Exception as e:
         print(f"Save error: {e}")
 
@@ -35,7 +51,7 @@ def load_users():
                 if u.get("last_daily"):
                     u["last_daily"] = datetime.fromisoformat(u["last_daily"])
                 users[int(uid)] = u
-            print(f"✅ Loaded {len(users)} users")
+            print(f"Loaded {len(users)} users")
     except Exception as e:
         print(f"Load error: {e}")
 
@@ -46,27 +62,24 @@ def init_user(uid, name):
             "balance": 1000,
             "businesses": 0,
             "farms": 0,
-            "last_daily": None,
-            "level": 1,
-            "exp": 0
+            "last_daily": None
         }
         save_users()
 
 def send_message(chat_id, text):
     try:
+        import urllib.request
+        import urllib.parse
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        data = urllib.parse.urlencode({
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML"
-        }).encode()
-        req = urllib.request.Request(url, data=data, method="POST")
-        urllib.request.urlopen(req)
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+        urllib.request.urlopen(urllib.request.Request(url, data=data))
     except Exception as e:
         print(f"Send error: {e}")
 
 def get_updates(offset):
     try:
+        import urllib.request
+        import json
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?timeout=30&offset={offset}"
         with urllib.request.urlopen(url) as response:
             return json.loads(response.read())
@@ -75,8 +88,6 @@ def get_updates(offset):
         return {"ok": False, "result": []}
 
 def handle_message(msg):
-    global users
-    
     chat_id = msg["chat"]["id"]
     user_id = msg["from"]["id"]
     user_name = msg["from"].get("first_name", "User")
@@ -84,55 +95,31 @@ def handle_message(msg):
     
     init_user(user_id, user_name)
     
-    # START
     if text == "/start":
         send_message(chat_id,
             "🎰 КАЗИНО БОТ 🎰\n\n"
-            "💰 /balance - баланс\n"
-            "👤 /profile - профиль\n"
-            "🎲 /casino 100 - сыграть\n"
-            "💀 /allin - всё или ничего\n"
-            "💼 /business - бизнес (500💰)\n"
-            "🌾 /farm - ферма (300💰)\n"
-            "📦 /collect - собрать доход\n"
-            "🎁 /daily - бонус\n"
-            "💸 /give 100 - перевод\n"
-            "🏆 /top - топ\n"
-            "⭐ /level - уровень")
+            "/balance - баланс\n"
+            "/casino 100 - сыграть\n"
+            "/allin - всё или ничего\n"
+            "/business - бизнес (500💰)\n"
+            "/farm - ферма (300💰)\n"
+            "/collect - собрать доход\n"
+            "/daily - бонус\n"
+            "/give 100 - перевод\n"
+            "/top - топ")
     
-    # BALANCE
     elif text == "/balance":
         send_message(chat_id, f"💰 Баланс: {users[user_id]['balance']}💰")
     
-    # PROFILE
-    elif text == "/profile":
-        u = users[user_id]
-        send_message(chat_id,
-            f"👤 {u['name']}\n"
-            f"💰 {u['balance']}💰\n"
-            f"⭐ Уровень {u['level']}\n"
-            f"🏢 Бизнесов: {u['businesses']}\n"
-            f"🌾 Ферм: {u['farms']}")
-    
-    # LEVEL
-    elif text == "/level":
-        u = users[user_id]
-        need = u['level'] * 100
-        send_message(chat_id, f"⭐ Уровень: {u['level']}\n📊 Опыт: {u['exp']}/{need}")
-    
-    # CASINO
     elif text.startswith("/casino "):
         try:
             bet = int(text.split()[1])
-            if bet <= 0:
-                send_message(chat_id, "❌ Ставка должна быть больше 0!")
-            elif users[user_id]["balance"] < bet:
-                send_message(chat_id, f"❌ Не хватает! У вас {users[user_id]['balance']}💰")
+            if bet <= 0 or users[user_id]["balance"] < bet:
+                send_message(chat_id, "❌ Не хватает денег!")
             else:
                 if random.random() < 0.45:
                     win = bet * 2
                     users[user_id]["balance"] += win
-                    users[user_id]["exp"] += win // 10
                     save_users()
                     send_message(chat_id, f"🎉 ВЫИГРЫШ! +{win}💰\n💰 Баланс: {users[user_id]['balance']}💰")
                 else:
@@ -142,7 +129,6 @@ def handle_message(msg):
         except:
             send_message(chat_id, "🎲 /casino 100")
     
-    # ALLIN
     elif text == "/allin":
         bet = users[user_id]["balance"]
         if bet <= 0:
@@ -150,7 +136,6 @@ def handle_message(msg):
         else:
             if random.random() < 0.4:
                 users[user_id]["balance"] *= 2
-                users[user_id]["exp"] += bet // 5
                 save_users()
                 send_message(chat_id, f"💀🔥 УДВОИЛИ! Баланс: {users[user_id]['balance']}💰")
             else:
@@ -158,7 +143,6 @@ def handle_message(msg):
                 save_users()
                 send_message(chat_id, f"💀😭 ПРОИГРАЛИ ВСЁ! Баланс: 0💰")
     
-    # BUSINESS
     elif text == "/business":
         if users[user_id]["balance"] >= 500:
             users[user_id]["balance"] -= 500
@@ -168,7 +152,6 @@ def handle_message(msg):
         else:
             send_message(chat_id, f"❌ Нужно 500💰, у вас {users[user_id]['balance']}💰")
     
-    # FARM
     elif text == "/farm":
         if users[user_id]["balance"] >= 300:
             users[user_id]["balance"] -= 300
@@ -178,7 +161,6 @@ def handle_message(msg):
         else:
             send_message(chat_id, f"❌ Нужно 300💰, у вас {users[user_id]['balance']}💰")
     
-    # COLLECT
     elif text == "/collect":
         total = users[user_id]["businesses"] * 50 + users[user_id]["farms"] * 30
         if total > 0:
@@ -188,34 +170,26 @@ def handle_message(msg):
         else:
             send_message(chat_id, "⏳ Нет бизнесов или ферм!")
     
-    # DAILY
     elif text == "/daily":
         today = datetime.now().date()
         if users[user_id]["last_daily"] == today:
             send_message(chat_id, "❌ Бонус уже получен! Завтра.")
         else:
-            bonus = 200 + users[user_id]["level"] * 50
-            users[user_id]["balance"] += bonus
-            users[user_id]["exp"] += 50
+            users[user_id]["balance"] += 200
             users[user_id]["last_daily"] = today
             save_users()
-            send_message(chat_id, f"🎁 БОНУС! +{bonus}💰 +50 опыта!\n💰 Баланс: {users[user_id]['balance']}💰")
+            send_message(chat_id, f"🎁 БОНУС! +200💰\n💰 Баланс: {users[user_id]['balance']}💰")
     
-    # GIVE
     elif text.startswith("/give "):
         if "reply_to_message" not in msg:
             send_message(chat_id, "❌ Ответьте на сообщение человека!")
             return
-        
         try:
             amount = int(text.split()[1])
             receiver_id = msg["reply_to_message"]["from"]["id"]
             receiver_name = msg["reply_to_message"]["from"].get("first_name", "User")
-            
-            if amount <= 0:
-                send_message(chat_id, "❌ Сумма должна быть больше 0!")
-            elif users[user_id]["balance"] < amount:
-                send_message(chat_id, f"❌ Не хватает! У вас {users[user_id]['balance']}💰")
+            if amount <= 0 or users[user_id]["balance"] < amount:
+                send_message(chat_id, "❌ Не хватает денег!")
             else:
                 init_user(receiver_id, receiver_name)
                 users[user_id]["balance"] -= amount
@@ -225,7 +199,6 @@ def handle_message(msg):
         except:
             send_message(chat_id, "💸 /give 100 (ответом на сообщение)")
     
-    # TOP
     elif text == "/top":
         if not users:
             send_message(chat_id, "Нет игроков")
@@ -241,6 +214,7 @@ def main():
     global last_update_id
     load_users()
     print("🤖 Бот запущен!")
+    print("✅ HTTP сервер на порту 10000 запущен")
     
     while True:
         try:
@@ -252,7 +226,6 @@ def main():
                     last_update_id = update["update_id"]
         except Exception as e:
             print(f"Error: {e}")
-        
         time.sleep(1)
 
 if __name__ == "__main__":

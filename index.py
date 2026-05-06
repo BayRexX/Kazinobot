@@ -3,16 +3,19 @@ import json
 import os
 import time
 import threading
+import string
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 BOT_TOKEN = "8520721981:AAEoKN5DmuiDcL6YOjCP8vf0p3nbGcqHGyw"
 ADMIN_ID = 8642015975
 DATA_FILE = "users_data.json"
+PROMO_FILE = "promocodes.json"
 users = {}
+promocodes = {}
 last_update_id = 0
 
-# HTTP сервер для Render
+# ========== HTTP СЕРВЕР ДЛЯ RENDER ==========
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -28,7 +31,7 @@ def run_http_server():
 
 threading.Thread(target=run_http_server, daemon=True).start()
 
-# ========== РАБОТА С БАЗОЙ ДАННЫХ ==========
+# ========== РАБОТА С БАЗОЙ ПОЛЬЗОВАТЕЛЕЙ ==========
 def save_users():
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
@@ -53,6 +56,8 @@ def load_users():
                     u["last_daily"] = datetime.fromisoformat(u["last_daily"])
                 users[int(uid)] = u
             print(f"✅ Загружено {len(users)} пользователей")
+        else:
+            print("📁 Новый файл пользователей")
     except Exception as e:
         print(f"Load error: {e}")
 
@@ -80,46 +85,43 @@ def get_house_info(level):
     }
     return houses[level]
 
+# ========== РАБОТА С ПРОМОКОДАМИ ==========
+def save_promocodes():
+    try:
+        with open(PROMO_FILE, 'w', encoding='utf-8') as f:
+            json.dump(promocodes, f, ensure_ascii=False, indent=2)
+        print("✅ Промокоды сохранены")
+    except Exception as e:
+        print(f"Save promocodes error: {e}")
+
+def load_promocodes():
+    global promocodes
+    try:
+        if os.path.exists(PROMO_FILE):
+            with open(PROMO_FILE, 'r', encoding='utf-8') as f:
+                promocodes = json.load(f)
+            print(f"✅ Загружено {len(promocodes)} промокодов")
+        else:
+            print("📁 Новый файл промокодов")
+    except Exception as e:
+        print(f"Load promocodes error: {e}")
+
+def generate_promocode():
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(random.choice(chars) for _ in range(8))
+
 # ========== ОТПРАВКА СООБЩЕНИЙ ==========
-def send_message(chat_id, text, reply_markup=None):
+def send_message(chat_id, text):
     try:
         import urllib.request
         import urllib.parse
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
         data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)
         post_data = urllib.parse.urlencode(data).encode()
         req = urllib.request.Request(url, data=post_data, method="POST")
         urllib.request.urlopen(req)
     except Exception as e:
         print(f"Send error: {e}")
-
-def answer_callback(callback_id, text, show_alert=False):
-    try:
-        import urllib.request
-        import urllib.parse
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery"
-        data = {"callback_query_id": callback_id, "text": text, "show_alert": show_alert}
-        post_data = urllib.parse.urlencode(data).encode()
-        req = urllib.request.Request(url, data=post_data, method="POST")
-        urllib.request.urlopen(req)
-    except Exception as e:
-        print(f"Answer error: {e}")
-
-def edit_message(chat_id, message_id, text, reply_markup=None):
-    try:
-        import urllib.request
-        import urllib.parse
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText"
-        data = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
-        if reply_markup:
-            data["reply_markup"] = json.dumps(reply_markup)
-        post_data = urllib.parse.urlencode(data).encode()
-        req = urllib.request.Request(url, data=post_data, method="POST")
-        urllib.request.urlopen(req)
-    except Exception as e:
-        print(f"Edit error: {e}")
 
 def get_updates(offset):
     try:
@@ -131,111 +133,56 @@ def get_updates(offset):
         print(f"Get updates error: {e}")
         return {"ok": False, "result": []}
 
-# ========== АДМИН КЛАВИАТУРЫ ==========
-def admin_main_menu():
-    return {
-        "inline_keyboard": [
-            [{"text": "💰 Баланс", "callback_data": "adm_bal"}],
-            [{"text": "🏠 Дом", "callback_data": "adm_house"}],
-            [{"text": "💼 Бизнес", "callback_data": "adm_biz"}],
-            [{"text": "🌾 Ферма", "callback_data": "adm_farm"}],
-            [{"text": "💾 Экспорт БД", "callback_data": "adm_export"}]
-        ]
-    }
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+def show_profile(chat_id, user_id):
+    u = users[user_id]
+    house = get_house_info(u['house_level'])
+    hourly_income = u["businesses"] * 50 + u["farms"] * 30 + house["income"]
+    
+    next_house = ""
+    if u['house_level'] < 5:
+        next_h = get_house_info(u['house_level'] + 1)
+        next_house = f"\n🏠 След. дом: {next_h['name']} - {next_h['price']}💰"
+    
+    msg = (
+        f"👤 <b>{u['name']}</b>\n\n"
+        f"💰 Баланс: {u['balance']}💰\n"
+        f"🏠 Дом: {house['name']} (+{house['income']}💰/ч){next_house}\n"
+        f"💼 Бизнесов: {u['businesses']} (+{u['businesses']*50}💰/ч)\n"
+        f"🌾 Ферм: {u['farms']} (+{u['farms']*30}💰/ч)\n"
+        f"📊 Доход в час: {hourly_income}💰\n"
+        f"📦 /collect - собрать доход"
+    )
+    send_message(chat_id, msg)
 
-def admin_user_list(page=0):
-    keyboard = {"inline_keyboard": []}
-    user_list = list(users.items())
-    start = page * 10
-    end = min(start + 10, len(user_list))
+def show_house_menu(chat_id, user_id):
+    current = get_house_info(users[user_id]['house_level'])
+    msg = f"🏠 <b>Ваш дом:</b> {current['name']} (+{current['income']}💰/час)\n\n"
     
-    for i in range(start, end):
-        uid, u = user_list[i]
-        keyboard["inline_keyboard"].append([
-            {"text": f"👤 {u['name'][:20]}", "callback_data": f"adm_sel_{uid}"}
-        ])
-    
-    nav = []
-    if page > 0:
-        nav.append({"text": "◀️ Назад", "callback_data": f"adm_page_{page-1}"})
-    if end < len(user_list):
-        nav.append({"text": "Вперед ▶️", "callback_data": f"adm_page_{page+1}"})
-    if nav:
-        keyboard["inline_keyboard"].append(nav)
-    
-    keyboard["inline_keyboard"].append([{"text": "🔙 Главное меню", "callback_data": "adm_back"}])
-    return keyboard
-
-def admin_edit_menu(uid, field):
-    u = users[uid]
-    if field == "balance":
-        text = f"👤 {u['name']}\n💰 Баланс: {u['balance']}💰"
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "➕ +100", "callback_data": f"adm_add_bal_{uid}_100"}],
-                [{"text": "➕ +1000", "callback_data": f"adm_add_bal_{uid}_1000"}],
-                [{"text": "➖ -100", "callback_data": f"adm_sub_bal_{uid}_100"}],
-                [{"text": "➖ -1000", "callback_data": f"adm_sub_bal_{uid}_1000"}],
-                [{"text": "🔙 Назад", "callback_data": "adm_back_list"}]
-            ]
-        }
-    elif field == "house":
-        house = get_house_info(u['house_level'])
-        text = f"👤 {u['name']}\n🏠 Дом: {house['name']} (ур.{u['house_level']})"
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "⬆️ Повысить", "callback_data": f"adm_add_house_{uid}_1"}],
-                [{"text": "⬇️ Понизить", "callback_data": f"adm_sub_house_{uid}_1"}],
-                [{"text": "🔙 Назад", "callback_data": "adm_back_list"}]
-            ]
-        }
-    elif field == "business":
-        text = f"👤 {u['name']}\n💼 Бизнесов: {u['businesses']}"
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "➕ +1", "callback_data": f"adm_add_biz_{uid}_1"}],
-                [{"text": "➖ -1", "callback_data": f"adm_sub_biz_{uid}_1"}],
-                [{"text": "🔙 Назад", "callback_data": "adm_back_list"}]
-            ]
-        }
-    elif field == "farm":
-        text = f"👤 {u['name']}\n🌾 Ферм: {u['farms']}"
-        keyboard = {
-            "inline_keyboard": [
-                [{"text": "➕ +1", "callback_data": f"adm_add_farm_{uid}_1"}],
-                [{"text": "➖ -1", "callback_data": f"adm_sub_farm_{uid}_1"}],
-                [{"text": "🔙 Назад", "callback_data": "adm_back_list"}]
-            ]
-        }
+    if users[user_id]['house_level'] >= 5:
+        msg += "🎉 У вас максимальный дом!\n"
     else:
-        text = "Ошибка"
-        keyboard = {}
+        msg += "📋 Доступные дома:\n\n"
+        for level in range(users[user_id]['house_level'] + 1, 6):
+            house = get_house_info(level)
+            msg += f"{level}. {house['name']} — {house['price']}💰\n"
+        msg += "\n💡 Купить: /house 1 (цифра от 1 до 5)"
     
-    return text, keyboard
+    send_message(chat_id, msg)
 
-# ========== ПОКУПКА ДОМА КЛАВИАТУРА ==========
-def house_buy_menu(uid):
-    current_level = users[uid]['house_level']
-    keyboard = {"inline_keyboard": []}
+def buy_house(chat_id, user_id, level):
+    if users[user_id]['house_level'] + 1 != level:
+        send_message(chat_id, f"❌ Нужно покупать дома по порядку! Следующий дом: /house {users[user_id]['house_level'] + 1}")
+        return
     
-    for level in range(1, 6):
-        house = get_house_info(level)
-        if level == current_level + 1:
-            keyboard["inline_keyboard"].append([
-                {"text": f"🏠 {house['name']} - {house['price']}💰", "callback_data": f"buy_{level}"}
-            ])
-        elif level <= current_level:
-            keyboard["inline_keyboard"].append([
-                {"text": f"✅ {house['name']} (куплен)", "callback_data": "none"}
-            ])
-        else:
-            keyboard["inline_keyboard"].append([
-                {"text": f"🔒 {house['name']} (нужен уровень {level-1})", "callback_data": "none"}
-            ])
-    
-    current_house = get_house_info(current_level)
-    text = f"🏠 Ваш дом: {current_house['name']} (+{current_house['income']}💰/час)\n\nВыберите дом для покупки:"
-    return text, keyboard
+    house = get_house_info(level)
+    if users[user_id]["balance"] >= house["price"]:
+        users[user_id]["balance"] -= house["price"]
+        users[user_id]["house_level"] = level
+        save_users()
+        send_message(chat_id, f"🏠 ПОЗДРАВЛЯЮ!\nВы купили {house['name']}!\n💰 Остаток: {users[user_id]['balance']}💰")
+    else:
+        send_message(chat_id, f"❌ Не хватает! Нужно {house['price']}💰, у вас {users[user_id]['balance']}💰")
 
 # ========== ОБРАБОТКА КОМАНД ==========
 def handle_message(msg):
@@ -246,37 +193,51 @@ def handle_message(msg):
     
     init_user(user_id, user_name)
     
+    # START
     if text == "/start":
         send_message(chat_id,
             "🎰 КАЗИНО БОТ 🎰\n\n"
             "💰 /balance - баланс\n"
             "👤 /profile - профиль\n"
+            "👤 /profile (ответом) - профиль другого\n"
             "🏠 /house - купить дом\n"
+            "🏠 /house 1-5 - купить конкретный дом\n"
             "🎲 /casino 100 - сыграть\n"
             "💀 /allin - всё или ничего\n"
             "💼 /business - бизнес (500💰)\n"
             "🌾 /farm - ферма (300💰)\n"
             "📦 /collect - собрать доход\n"
             "🎁 /daily - бонус\n"
-            "💸 /give 100 - перевод\n"
+            "💸 /give 100 (ответом) - перевод\n"
+            "🎫 /promo КОД - активировать промокод\n"
             "🏆 /top - топ\n"
-            "👑 /admin - админ панель")
     
+    # PROFILE
     elif text == "/profile":
         show_profile(chat_id, user_id)
-    
     elif text.startswith("/profile") and msg.get("reply_to_message"):
         target_id = msg["reply_to_message"]["from"]["id"]
         init_user(target_id, msg["reply_to_message"]["from"].get("first_name", "User"))
         show_profile(chat_id, target_id)
     
+    # BALANCE
     elif text == "/balance":
         send_message(chat_id, f"💰 Баланс: {users[user_id]['balance']}💰")
     
+    # HOUSE
     elif text == "/house":
-        text, keyboard = house_buy_menu(user_id)
-        send_message(chat_id, text, keyboard)
+        show_house_menu(chat_id, user_id)
+    elif text.startswith("/house "):
+        try:
+            level = int(text.split()[1])
+            if 1 <= level <= 5:
+                buy_house(chat_id, user_id, level)
+            else:
+                send_message(chat_id, "🏠 Используй: /house 1-5\n1-Коробка 2-Хижина 3-5этажка 4-Частный дом 5-Коттедж")
+        except:
+            send_message(chat_id, "🏠 /house 1-5")
     
+    # CASINO
     elif text.startswith("/casino "):
         try:
             parts = text.split()
@@ -301,6 +262,7 @@ def handle_message(msg):
         except:
             send_message(chat_id, "🎲 /casino 100")
     
+    # ALLIN
     elif text == "/allin":
         bet = users[user_id]["balance"]
         if bet <= 0:
@@ -315,6 +277,7 @@ def handle_message(msg):
                 save_users()
                 send_message(chat_id, f"💀😭 ПРОИГРАЛИ ВСЁ! Баланс: 0💰")
     
+    # BUSINESS
     elif text == "/business":
         if users[user_id]["balance"] >= 500:
             users[user_id]["balance"] -= 500
@@ -322,8 +285,9 @@ def handle_message(msg):
             save_users()
             send_message(chat_id, f"✅ Бизнес куплен! -500💰\nДоход: 50💰/час")
         else:
-            send_message(chat_id, f"❌ Нужно 500💰")
+            send_message(chat_id, f"❌ Нужно 500💰, у вас {users[user_id]['balance']}💰")
     
+    # FARM
     elif text == "/farm":
         if users[user_id]["balance"] >= 300:
             users[user_id]["balance"] -= 300
@@ -331,8 +295,9 @@ def handle_message(msg):
             save_users()
             send_message(chat_id, f"✅ Ферма куплена! -300💰\nДоход: 30💰/час")
         else:
-            send_message(chat_id, f"❌ Нужно 300💰")
+            send_message(chat_id, f"❌ Нужно 300💰, у вас {users[user_id]['balance']}💰")
     
+    # COLLECT (ФИКС БАГА)
     elif text == "/collect":
         now = time.time()
         if 'last_collect' not in users[user_id]:
@@ -343,7 +308,7 @@ def handle_message(msg):
         if hours < 1:
             remaining = 3600 - (now - users[user_id]['last_collect'])
             minutes = int(remaining // 60)
-            send_message(chat_id, f"⏳ До сбора: {minutes} мин")
+            send_message(chat_id, f"⏳ До следующего сбора: {minutes} минут")
         else:
             house_income = get_house_info(users[user_id]['house_level'])["income"]
             total = users[user_id]["businesses"] * 50 + users[user_id]["farms"] * 30 + house_income
@@ -352,24 +317,26 @@ def handle_message(msg):
                 users[user_id]["balance"] += total
                 users[user_id]['last_collect'] = now
                 save_users()
-                send_message(chat_id, f"📦 +{total}💰 за {int(hours)} ч!\n💰 Баланс: {users[user_id]['balance']}💰")
+                send_message(chat_id, f"📦 Собрано {total}💰 за {int(hours)} час(ов)!\n💰 Баланс: {users[user_id]['balance']}💰")
             else:
-                send_message(chat_id, "⏳ Нет бизнесов, ферм и дома!")
+                send_message(chat_id, "⏳ Нет бизнесов, ферм и дома! Купи /business, /farm, /house")
     
+    # DAILY
     elif text == "/daily":
         today = datetime.now().date()
         if users[user_id]["last_daily"] == today:
-            send_message(chat_id, "❌ Бонус уже был сегодня!")
+            send_message(chat_id, "❌ Бонус уже получен! Завтра.")
         else:
-            bonus = 200
+            bonus = 200 + users[user_id]["house_level"] * 50
             users[user_id]["balance"] += bonus
             users[user_id]["last_daily"] = today
             save_users()
-            send_message(chat_id, f"🎁 +{bonus}💰! Баланс: {users[user_id]['balance']}💰")
+            send_message(chat_id, f"🎁 ЕЖЕДНЕВНЫЙ БОНУС! +{bonus}💰\n💰 Баланс: {users[user_id]['balance']}💰")
     
+    # GIVE
     elif text.startswith("/give "):
         if "reply_to_message" not in msg:
-            send_message(chat_id, "❌ Ответьте на сообщение!")
+            send_message(chat_id, "❌ Ответьте на сообщение человека, которому хотите перевести!")
             return
         try:
             parts = text.split()
@@ -382,16 +349,18 @@ def handle_message(msg):
             if amount <= 0:
                 send_message(chat_id, "❌ Сумма > 0!")
             elif users[user_id]["balance"] < amount:
-                send_message(chat_id, f"❌ Не хватает!")
+                send_message(chat_id, f"❌ Не хватает! У вас {users[user_id]['balance']}💰")
             else:
                 init_user(receiver_id, receiver_name)
                 users[user_id]["balance"] -= amount
                 users[receiver_id]["balance"] += amount
                 save_users()
                 send_message(chat_id, f"✅ Переведено {amount}💰 {receiver_name}")
+                send_message(receiver_id, f"💰 {user_name} перевёл(а) вам {amount}💰!\nБаланс: {users[receiver_id]['balance']}💰")
         except:
             send_message(chat_id, "💸 /give 100")
     
+    # TOP
     elif text == "/top":
         if not users:
             send_message(chat_id, "Нет игроков")
@@ -403,196 +372,287 @@ def handle_message(msg):
                 result += f"{medal} {data['name']} — {data['balance']}💰\n"
             send_message(chat_id, result)
     
-    elif text == "/admin":
-        if user_id == ADMIN_ID:
-            send_message(chat_id, "👑 АДМИН ПАНЕЛЬ", admin_main_menu())
-        else:
-            send_message(chat_id, "❌ Нет доступа!")
-
-def show_profile(chat_id, user_id):
-    u = users[user_id]
-    house = get_house_info(u['house_level'])
-    hourly_income = u["businesses"] * 50 + u["farms"] * 30 + house["income"]
-    
-    msg = (
-        f"👤 <b>{u['name']}</b>\n\n"
-        f"💰 Баланс: {u['balance']}💰\n"
-        f"🏠 Дом: {house['name']} (+{house['income']}💰/ч)\n"
-        f"💼 Бизнесов: {u['businesses']} (+{u['businesses']*50}💰/ч)\n"
-        f"🌾 Ферм: {u['farms']} (+{u['farms']*30}💰/ч)\n"
-        f"📊 Доход в час: {hourly_income}💰"
-    )
-    send_message(chat_id, msg)
-
-# ========== ОБРАБОТКА CALLBACK ==========
-def handle_callback(callback):
-    chat_id = callback["message"]["chat"]["id"]
-    message_id = callback["message"]["message_id"]
-    user_id = callback["from"]["id"]
-    callback_id = callback["id"]
-    data = callback["data"]
-    
-    if data == "none":
-        answer_callback(callback_id, "Это действие недоступно", True)
-        return
-    
-    # ПОКУПКА ДОМА (для обычных пользователей)
-    if data.startswith("buy_"):
-        level = int(data.split("_")[1])
-        house = get_house_info(level)
+    # PROMO (активация для всех)
+    elif text.startswith("/promo "):
+        parts = text.split()
+        if len(parts) != 2:
+            send_message(chat_id, "🎫 /promo [код]\n\nПример: /promo ABC12345")
+            return
         
-        if users[user_id]["house_level"] + 1 == level:
-            if users[user_id]["balance"] >= house["price"]:
-                users[user_id]["balance"] -= house["price"]
-                users[user_id]["house_level"] = level
-                save_users()
-                answer_callback(callback_id, f"✅ Куплен {house['name']}!", False)
-                edit_message(chat_id, message_id, f"🏠 Поздравляем! Вы купили {house['name']}!\n💰 Остаток: {users[user_id]['balance']}💰")
-            else:
-                answer_callback(callback_id, f"❌ Нужно {house['price']}💰", True)
-        else:
-            answer_callback(callback_id, "❌ Покупай дома по порядку!", True)
+        code = parts[1].upper()
         
-        text, keyboard = house_buy_menu(user_id)
-        edit_message(chat_id, message_id, text, keyboard)
-        return
+        if code not in promocodes:
+            send_message(chat_id, f"❌ Промокод {code} не найден!")
+            return
+        
+        promo = promocodes[code]
+        
+        if promo["used"] >= promo["max_uses"]:
+            send_message(chat_id, f"❌ Промокод {code} уже использован максимальное количество раз!")
+            return
+        
+        if str(user_id) in promo["used_by"]:
+            send_message(chat_id, "❌ Вы уже активировали этот промокод!")
+            return
+        
+        promo["used"] += 1
+        promo["used_by"].append(str(user_id))
+        users[user_id]["balance"] += promo["amount"]
+        save_users()
+        save_promocodes()
+        
+        remaining = promo["max_uses"] - promo["used"]
+        send_message(chat_id, f"🎉 ПРОМОКОД АКТИВИРОВАН!\n\n💰 +{promo['amount']}💰\n📊 Осталось активаций: {remaining}\n💰 Ваш баланс: {users[user_id]['balance']}💰")
     
-    # АДМИН ПАНЕЛЬ
-    if user_id != ADMIN_ID:
-        answer_callback(callback_id, "❌ Нет доступа!", True)
-        return
+    # ========== АДМИН КОМАНДЫ ==========
+    elif text == "/admin" and user_id == ADMIN_ID:
+        send_message(chat_id,
+            "👑 АДМИН ПАНЕЛЬ 👑\n\n"
+            f"📊 Статистика:\n"
+            f"👥 Всего игроков: {len(users)}\n"
+            f"🎫 Промокодов: {len(promocodes)}\n\n"
+            "🔧 Команды:\n"
+            "/admin_balance [ID] [сумма] - изменить баланс\n"
+            "/admin_house [ID] [1-5] - изменить дом\n"
+            "/admin_business [ID] [+/-] - бизнесы\n"
+            "/admin_farm [ID] [+/-] - фермы\n"
+            "/admin_top - топ игроков\n"
+            "/admin_list - список игроков\n"
+            "/admin_export - экспорт БД\n"
+            "/createpromo [сумма] [активации] - создать промокод\n"
+            "/listpromo - список промокодов\n"
+            "/delpromo [код] - удалить промокод\n"
+            "/admin_help - подробная помощь")
     
-    # Главное меню админа
-    if data == "adm_bal":
-        admin_temp = {"action": "balance", "page": 0}
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_list(0))
-    elif data == "adm_house":
-        admin_temp = {"action": "house", "page": 0}
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_list(0))
-    elif data == "adm_biz":
-        admin_temp = {"action": "business", "page": 0}
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_list(0))
-    elif data == "adm_farm":
-        admin_temp = {"action": "farm", "page": 0}
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_list(0))
-    elif data == "adm_export":
+    elif text == "/admin_help" and user_id == ADMIN_ID:
+        send_message(chat_id,
+            "📖 АДМИН КОМАНДЫ:\n\n"
+            "💰 БАЛАНС:\n"
+            "/admin_balance 123456 500 - добавить 500💰\n"
+            "/admin_balance 123456 -500 - отнять 500💰\n"
+            "/admin_balance 123456 =1000 - установить 1000💰\n\n"
+            "🏠 ДОМ:\n"
+            "/admin_house 123456 3 - установить дом (0-5)\n\n"
+            "💼 БИЗНЕС:\n"
+            "/admin_business 123456 + - добавить бизнес\n"
+            "/admin_business 123456 - - убрать бизнес\n\n"
+            "🌾 ФЕРМА:\n"
+            "/admin_farm 123456 + - добавить ферму\n"
+            "/admin_farm 123456 - - убрать ферму\n\n"
+            "🎫 ПРОМОКОДЫ:\n"
+            "/createpromo 500 10 - создать промокод\n"
+            "/listpromo - список промокодов\n"
+            "/delpromo ABC12345 - удалить промокод\n\n"
+            "📊 ПРОЧЕЕ:\n"
+            "/admin_top - топ 10 по балансу\n"
+            "/admin_list - список игроков с ID\n"
+            "/admin_export - экспорт БД в JSON")
+    
+    elif text == "/admin_top" and user_id == ADMIN_ID:
+        if not users:
+            send_message(chat_id, "Нет игроков")
+        else:
+            sorted_users = sorted(users.items(), key=lambda x: x[1]["balance"], reverse=True)[:10]
+            result = "🏆 ТОП ИГРОКОВ (АДМИН) 🏆\n\n"
+            for i, (uid, data) in enumerate(sorted_users, 1):
+                result += f"{i}. {data['name']} (ID:{uid}) — {data['balance']}💰\n"
+            send_message(chat_id, result)
+    
+    elif text == "/admin_list" and user_id == ADMIN_ID:
+        if not users:
+            send_message(chat_id, "Нет игроков")
+        else:
+            result = "📋 СПИСОК ИГРОКОВ:\n\n"
+            for uid, data in list(users.items())[:30]:
+                result += f"👤 {data['name']} — ID: {uid}\n"
+            if len(users) > 30:
+                result += f"\n... и ещё {len(users)-30} игроков"
+            send_message(chat_id, result)
+    
+    elif text == "/admin_export" and user_id == ADMIN_ID:
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 backup = f.read()
             if len(backup) > 4000:
-                backup = backup[:4000] + "\n...(обрезано)"
-            send_message(chat_id, f"💾 БД:\n<code>{backup}</code>")
-            answer_callback(callback_id, "✅ Экспорт выполнен", False)
+                backup = backup[:4000] + "\n... (файл слишком большой, обрезано)"
+            send_message(chat_id, f"💾 ЭКСПОРТ БД:\n\n<code>{backup}</code>")
         except Exception as e:
             send_message(chat_id, f"❌ Ошибка: {e}")
-    elif data == "adm_back":
-        edit_message(chat_id, message_id, "👑 АДМИН ПАНЕЛЬ", admin_main_menu())
-    elif data == "adm_back_list":
-        edit_message(chat_id, message_id, "👑 АДМИН ПАНЕЛЬ", admin_main_menu())
     
-    # Пагинация
-    elif data.startswith("adm_page_"):
-        page = int(data.split("_")[2])
-        edit_message(chat_id, message_id, "👑 Выберите пользователя:", admin_user_list(page))
+    elif text.startswith("/admin_balance") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 3:
+            send_message(chat_id, "⚠️ /admin_balance [ID] [сумма]\nПример: /admin_balance 123456 500\nПример: /admin_balance 123456 -500\nПример: /admin_balance 123456 =1000")
+            return
+        try:
+            target_id = int(parts[1])
+            amount_str = parts[2]
+            
+            if target_id not in users:
+                send_message(chat_id, f"❌ Пользователь с ID {target_id} не найден!")
+                return
+            
+            if amount_str.startswith("="):
+                new_balance = int(amount_str[1:])
+                old_balance = users[target_id]["balance"]
+                users[target_id]["balance"] = new_balance
+                save_users()
+                send_message(chat_id, f"✅ Баланс {users[target_id]['name']} изменён:\n{old_balance}💰 → {new_balance}💰")
+            else:
+                amount = int(amount_str)
+                old_balance = users[target_id]["balance"]
+                users[target_id]["balance"] += amount
+                if users[target_id]["balance"] < 0:
+                    users[target_id]["balance"] = 0
+                save_users()
+                if amount > 0:
+                    send_message(chat_id, f"✅ +{amount}💰 {users[target_id]['name']}\n{old_balance}💰 → {users[target_id]['balance']}💰")
+                else:
+                    send_message(chat_id, f"✅ {amount}💰 {users[target_id]['name']}\n{old_balance}💰 → {users[target_id]['balance']}💰")
+        except:
+            send_message(chat_id, "❌ Ошибка! /admin_balance [ID] [сумма]")
     
-    # Выбор пользователя
-    elif data.startswith("adm_sel_"):
-        target_uid = int(data.split("_")[2])
-        # Определяем текущее действие из сообщения
-        text = callback["message"]["text"]
-        if "баланс" in text.lower():
-            field = "balance"
-        elif "дом" in text.lower():
-            field = "house"
-        elif "бизнес" in text.lower():
-            field = "business"
-        elif "ферм" in text.lower():
-            field = "farm"
+    elif text.startswith("/admin_house") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 3:
+            send_message(chat_id, "⚠️ /admin_house [ID] [1-5]\nПример: /admin_house 123456 3")
+            return
+        try:
+            target_id = int(parts[1])
+            level = int(parts[2])
+            
+            if target_id not in users:
+                send_message(chat_id, f"❌ Пользователь с ID {target_id} не найден!")
+                return
+            if level < 0 or level > 5:
+                send_message(chat_id, "❌ Уровень дома должен быть от 0 до 5!")
+                return
+            
+            old_house = get_house_info(users[target_id]["house_level"])
+            users[target_id]["house_level"] = level
+            new_house = get_house_info(level)
+            save_users()
+            send_message(chat_id, f"✅ Дом {users[target_id]['name']} изменён:\n{old_house['name']} → {new_house['name']}")
+        except:
+            send_message(chat_id, "❌ Ошибка! /admin_house [ID] [1-5]")
+    
+    elif text.startswith("/admin_business") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 3:
+            send_message(chat_id, "⚠️ /admin_business [ID] [+/-]\nПример: /admin_business 123456 +\nПример: /admin_business 123456 -")
+            return
+        try:
+            target_id = int(parts[1])
+            action = parts[2]
+            
+            if target_id not in users:
+                send_message(chat_id, f"❌ Пользователь с ID {target_id} не найден!")
+                return
+            
+            if action == "+":
+                users[target_id]["businesses"] += 1
+                save_users()
+                send_message(chat_id, f"✅ +1 бизнес {users[target_id]['name']}\nВсего: {users[target_id]['businesses']}")
+            elif action == "-":
+                users[target_id]["businesses"] = max(0, users[target_id]["businesses"] - 1)
+                save_users()
+                send_message(chat_id, f"✅ -1 бизнес {users[target_id]['name']}\nВсего: {users[target_id]['businesses']}")
+            else:
+                send_message(chat_id, "❌ Используй + или -")
+        except:
+            send_message(chat_id, "❌ Ошибка! /admin_business [ID] [+/-]")
+    
+    elif text.startswith("/admin_farm") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 3:
+            send_message(chat_id, "⚠️ /admin_farm [ID] [+/-]\nПример: /admin_farm 123456 +\nПример: /admin_farm 123456 -")
+            return
+        try:
+            target_id = int(parts[1])
+            action = parts[2]
+            
+            if target_id not in users:
+                send_message(chat_id, f"❌ Пользователь с ID {target_id} не найден!")
+                return
+            
+            if action == "+":
+                users[target_id]["farms"] += 1
+                save_users()
+                send_message(chat_id, f"✅ +1 ферма {users[target_id]['name']}\nВсего: {users[target_id]['farms']}")
+            elif action == "-":
+                users[target_id]["farms"] = max(0, users[target_id]["farms"] - 1)
+                save_users()
+                send_message(chat_id, f"✅ -1 ферма {users[target_id]['name']}\nВсего: {users[target_id]['farms']}")
+            else:
+                send_message(chat_id, "❌ Используй + или -")
+        except:
+            send_message(chat_id, "❌ Ошибка! /admin_farm [ID] [+/-]")
+    
+    # ========== СОЗДАНИЕ ПРОМОКОДА (АДМИН) ==========
+    elif text.startswith("/createpromo") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 3:
+            send_message(chat_id, "🎫 /createpromo [сумма] [активации]\n\nПример: /createpromo 500 10")
+            return
+        try:
+            amount = int(parts[1])
+            max_uses = int(parts[2])
+            
+            if amount <= 0:
+                send_message(chat_id, "❌ Сумма > 0!")
+                return
+            if max_uses <= 0:
+                send_message(chat_id, "❌ Активаций > 0!")
+                return
+            
+            code = generate_promocode()
+            promocodes[code] = {
+                "amount": amount,
+                "max_uses": max_uses,
+                "used": 0,
+                "used_by": [],
+                "created_by": user_id,
+                "created_at": datetime.now().isoformat()
+            }
+            save_promocodes()
+            send_message(chat_id, f"✅ ПРОМОКОД СОЗДАН!\n\n🎫 Код: <code>{code}</code>\n💰 Сумма: {amount}💰\n🔄 Активаций: {max_uses}\n\nИспользовать: /promo {code}")
+        except:
+            send_message(chat_id, "❌ Ошибка! /createpromo 500 10")
+    
+    elif text.startswith("/delpromo") and user_id == ADMIN_ID:
+        parts = text.split()
+        if len(parts) != 2:
+            send_message(chat_id, "🗑️ /delpromo [код]\n\nПример: /delpromo ABC12345")
+            return
+        code = parts[1].upper()
+        if code in promocodes:
+            del promocodes[code]
+            save_promocodes()
+            send_message(chat_id, f"✅ Промокод {code} удалён!")
         else:
-            field = "balance"
+            send_message(chat_id, f"❌ Промокод {code} не найден!")
+    
+    elif text == "/listpromo" and user_id == ADMIN_ID:
+        if not promocodes:
+            send_message(chat_id, "📭 Нет активных промокодов")
+            return
         
-        edit_text, keyboard = admin_edit_menu(target_uid, field)
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    # Добавление/убавление
-    elif data.startswith("adm_add_bal_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        amount = int(parts[4])
-        users[target_uid]["balance"] += amount
-        save_users()
-        answer_callback(callback_id, f"✅ +{amount}💰", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "balance")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_sub_bal_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        amount = int(parts[4])
-        users[target_uid]["balance"] = max(0, users[target_uid]["balance"] - amount)
-        save_users()
-        answer_callback(callback_id, f"✅ -{amount}💰", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "balance")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_add_house_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["house_level"] = min(5, users[target_uid]["house_level"] + 1)
-        save_users()
-        answer_callback(callback_id, "✅ Уровень дома повышен", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "house")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_sub_house_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["house_level"] = max(0, users[target_uid]["house_level"] - 1)
-        save_users()
-        answer_callback(callback_id, "✅ Уровень дома понижен", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "house")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_add_biz_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["businesses"] += 1
-        save_users()
-        answer_callback(callback_id, "✅ +1 бизнес", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "business")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_sub_biz_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["businesses"] = max(0, users[target_uid]["businesses"] - 1)
-        save_users()
-        answer_callback(callback_id, "✅ -1 бизнес", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "business")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_add_farm_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["farms"] += 1
-        save_users()
-        answer_callback(callback_id, "✅ +1 ферма", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "farm")
-        edit_message(chat_id, message_id, edit_text, keyboard)
-    
-    elif data.startswith("adm_sub_farm_"):
-        parts = data.split("_")
-        target_uid = int(parts[3])
-        users[target_uid]["farms"] = max(0, users[target_uid]["farms"] - 1)
-        save_users()
-        answer_callback(callback_id, "✅ -1 ферма", False)
-        edit_text, keyboard = admin_edit_menu(target_uid, "farm")
-        edit_message(chat_id, message_id, edit_text, keyboard)
+        msg = "🎫 АКТИВНЫЕ ПРОМОКОДЫ 🎫\n\n"
+        for code, data in promocodes.items():
+            remaining = data["max_uses"] - data["used"]
+            msg += f"<code>{code}</code> — {data['amount']}💰, осталось: {remaining}/{data['max_uses']}\n"
+        send_message(chat_id, msg)
 
 def main():
     global last_update_id
     load_users()
-    print("🤖 Бот запущен!")
+    load_promocodes()
+    print("=" * 40)
+    print("🤖 БОТ КАЗИНО ЗАПУЩЕН!")
+    print(f"👑 АДМИН ID: {ADMIN_ID}")
+    print(f"👥 ПОЛЬЗОВАТЕЛЕЙ: {len(users)}")
+    print(f"🎫 ПРОМОКОДОВ: {len(promocodes)}")
+    print("=" * 40)
     
     while True:
         try:
@@ -601,8 +661,6 @@ def main():
                 for update in updates.get("result", []):
                     if "message" in update:
                         handle_message(update["message"])
-                    if "callback_query" in update:
-                        handle_callback(update["callback_query"])
                     if update["update_id"] > last_update_id:
                         last_update_id = update["update_id"]
         except Exception as e:

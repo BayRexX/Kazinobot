@@ -211,6 +211,7 @@ def handle_message(msg):
             "💸 /give 100 (ответом) - перевод\n"
             "🎫 /promo КОД - активировать промокод\n"
             "🏆 /top - топ\n"
+            "👑 /admin - админ панель")
     
     # PROFILE
     elif text == "/profile":
